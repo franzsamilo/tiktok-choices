@@ -1,0 +1,94 @@
+# Story bible: the creative brief every episode is written against.
+# Creators own this file. Change the premise, characters or style here; the
+# pipeline needs no code changes.
+
+series_id: tulog
+title: "TULOG"
+logline: "Metro Manila, the morning after. The infected stand perfectly still, until you make a sound."
+
+premise: >
+  Overnight, most of Metro Manila "fell asleep standing up". The infected, the
+  Tulog, stand motionless wherever they were: in jeepneys, at sari-sari store
+  counters, on MRT platforms. They are blind and nearly deaf, but any sharp
+  sound (a horn, a dropped pot, a ringtone) wakes every Tulog within earshot,
+  and a woken Tulog runs. You are one of the few still awake. Each day the
+  audience makes one choice for you.
+
+point_of_view: >
+  Second person, present tense ("You", never "I"). The protagonist is never
+  shown on camera: shots are first-person POV (your hands, your feet, what you
+  see) or shots of companions and the world.
+
+setting: >
+  Metro Manila during rainy season: flooded side streets, tangled power lines,
+  abandoned jeepneys, sari-sari stores, malls, Pasig River, MRT stations,
+  barangay halls, churches, rooftop water tanks.
+
+tone: >
+  Tense, grounded survival with flashes of warmth and dark humour. Dread
+  comes from silence and sound, not gore. Think "one wrong noise".
+
+world_rules:
+  - "Sharp or sudden sounds wake the Tulog. Steady low sounds (rain, a running engine at idle) do not."
+  - "Woken Tulog run toward the sound for about a minute, then slowly stand still again wherever they stop."
+  - "Rain is cover. Thunder is chaos: every Tulog in the area wakes at once."
+  - "Phones still have signal for now, but every ringtone is a death sentence. Batteries matter."
+  - "The infection spreads through bites. A bitten person falls asleep standing within hours."
+  - "No cure is known. Rumours of a safe zone in the north are unconfirmed."
+
+content_rules:
+  - "Keep it safe for a 13+ platform audience: no gore, no on-screen bites, no blood close-ups. Imply, don't show."
+  - "No real brands, no real people, no real politicians, no real company names."
+  - "Never a game over. A bad choice costs time, supplies, safety or a companion, and the story always continues."
+  - "Both options of every dilemma must be defensible. Never make one obviously right."
+  - "Companions can be lost, but only as the consequence of an audience choice, never at random."
+
+format_rules:
+  - "The first scene opens on the immediate consequence of yesterday's choice. No slow intros."
+  - "Each episode covers a short, continuous stretch of time (minutes to an hour)."
+  - "End on a cliffhanger that forces exactly one binary choice."
+  - "Option labels must be short enough to comment: 1-4 words."
+  - "Name the choice with a concrete action, not an attitude (TAKE THE BIKE, not BE BRAVE)."
+
+characters:
+  - name: "Lola Cora"
+    role: "Your 72-year-old grandmother. Former barangay nurse. Unflappable, bossy, secretly terrified."
+    look: >
+      a small 72-year-old Filipina grandmother with silver hair in a tight bun,
+      round wire-rim glasses, a faded floral duster dress, rubber slippers, a
+      woven buri bayong bag on her arm
+    voice: "Short sentences. Calls you 'apo'. Prays under her breath when scared."
+    starts_with_you: true
+  - name: "Migs"
+    role: "A 17-year-old delivery rider who turns up at your door on the first morning. Fast, reckless, loyal."
+    look: >
+      a lanky 17-year-old Filipino boy with messy black hair and a thin moustache,
+      a faded yellow delivery-rider jacket, a cracked white helmet hanging from
+      one arm, scuffed sneakers
+    voice: "Taglish, jokes when nervous, calls you 'boss'."
+    starts_with_you: false
+  - name: "Bantay"
+    role: "A brown askal (street dog). Never barks. Somehow knows."
+    look: "a skinny short-haired brown Filipino street dog with one torn ear and a red cloth collar"
+    voice: "Silent. Growls very low when Tulog are near."
+    starts_with_you: false
+
+starting_location: "Lola Cora's two-storey house in a narrow alley in Sampaloc, Manila, at dawn"
+starting_inventory:
+  - "your phone (34% battery, on silent)"
+  - "Lola Cora's first-aid kit"
+  - "a bolo knife"
+  - "two litres of water"
+  - "a pack of crackers"
+
+visual_style: >
+  cinematic vertical 9:16 film still, shot on 35mm, desaturated teal-and-amber
+  colour grade, humid overcast light, wet reflective surfaces, light film
+  grain, shallow depth of field, Manila street details, realistic, moody,
+  no text, no watermark
+
+negative_prompt: >
+  gore, blood, wounds, text, captions, watermark, logo, brand names, extra
+  fingers, deformed hands, cartoon, anime, 3d render, oversaturated
+
+hashtags: [tulog, zombieapocalypse, choosewisely, manila, interactivestory, aistory]

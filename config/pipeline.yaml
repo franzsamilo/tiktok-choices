@@ -1,0 +1,75 @@
+# Pipeline plumbing. Run `choices --offline ...` to swap every paid provider
+# for its local stand-in without editing this file.
+
+series_file: config/series.yaml
+data_dir: runs
+
+providers:
+  writer: claude          # claude | mock
+  critic: claude          # claude | rules   (rules-only skips the LLM critic)
+  vote_classifier: claude # claude | none    (LLM only sees comments the rule parser can't read)
+  image: fal              # fal | mock
+  video: none             # fal | none      (none = Ken Burns motion on stills, ~10x cheaper)
+  voice: elevenlabs       # elevenlabs | mock
+
+models:
+  writer: claude-opus-5-5
+  writer_effort: high
+  critic: claude-opus-5-5
+  critic_effort: medium
+  vote_classifier: claude-opus-5-5
+  vote_classifier_effort: low
+  # Image/video model IDs move fast. Check the provider's catalogue and pin what you tested.
+  fal_image: fal-ai/flux/dev
+  fal_video: fal-ai/kling-video/v2.1/standard/image-to-video
+  elevenlabs_model: eleven_multilingual_v2
+  elevenlabs_voice_id: ""   # set to a deep, calm narrator voice from your ElevenLabs library
+
+writing:
+  target_seconds: 50
+  words_per_second: 2.6
+  min_scenes: 4
+  max_scenes: 7
+  max_revisions: 2
+  history_episodes_in_full: 3
+
+render:
+  width: 1080
+  height: 1920
+  fps: 30
+  hook_seconds: 2.4
+  choice_card_seconds: 4.5
+  music_path: ""          # optional licensed music bed; a generated ambient drone is used otherwise
+  music_volume_db: -22
+  target_lufs: -14
+
+voting:
+  window_hours: 24
+  min_votes: 5            # below this the episode is "low turnout" and the tie-break decides
+  tie_margin: 0.02        # |A-B| / total under this counts as a tie
+  tie_break: chaos        # chaos (seeded coin flip, announced on-screen) | A | B
+  keep: latest            # a viewer who changes their mind: keep their latest or first vote
+  like_weight: 0.0        # >0 lets likes on a vote comment count as partial votes
+  like_cap: 50
+  platform_weights: {tiktok: 1.0, instagram: 1.0}
+  max_llm_comments: 600
+  llm_batch_size: 120
+  quote_crowd: true       # let the writer quote (anonymised) top comments in the recap
+
+tiktok:
+  enabled: true
+  api_base: https://business-api.tiktok.com/open_api/v1.3
+  business_id_env: TIKTOK_BUSINESS_ID
+  access_token_env: TIKTOK_ACCESS_TOKEN
+
+instagram:
+  enabled: true
+  graph_base: https://graph.facebook.com/v21.0
+  user_id_env: IG_USER_ID
+  access_token_env: IG_ACCESS_TOKEN
+
+publish:
+  mode: export            # export (bundle for manual posting) | api (TikTok + Instagram APIs)
+  require_review: true    # a human approves every episode before it goes out
+  public_base_url_env: PUBLIC_MEDIA_BASE_URL  # api mode: where final.mp4 is reachable by URL
+  disclose_ai: true
