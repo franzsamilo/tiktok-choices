@@ -25,6 +25,7 @@ class WriteRequest:
     feedback: list[str] = field(default_factory=list)
     previous_draft: EpisodeScript | None = None
     state: SeriesState | None = None  # structured canon, for writers that don't read prose
+    performance: str = ""  # measured results of past episodes (analytics.performance_digest)
 
 
 class Writer(Protocol):
@@ -44,6 +45,7 @@ class ClaudeWriter:
             outcome=req.outcome,
             feedback=req.feedback,
             previous_draft=req.previous_draft,
+            performance=req.performance,
         )
         return self.claude.structured(
             purpose="writer" if req.previous_draft is None else "writer-revision",
@@ -74,6 +76,7 @@ def draft_episode(
     outcome: Outcome | None,
     reviewer_notes: list[str] | None = None,
     previous_draft: EpisodeScript | None = None,
+    performance: str = "",
 ) -> DraftResult:
     canon = render_canon(state)
     history = render_history(state, recent)
@@ -88,7 +91,7 @@ def draft_episode(
         script, call = writer.write(
             WriteRequest(
                 day=day, canon=canon, history=history, outcome=outcome,
-                feedback=feedback, previous_draft=draft, state=state,
+                feedback=feedback, previous_draft=draft, state=state, performance=performance,
             )
         )
         if call:

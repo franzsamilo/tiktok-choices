@@ -9,11 +9,18 @@ behaviour for free:
 * server-side refusal fallback on models that support it,
 * a cached system prompt (the story bible is identical across calls),
 * token usage recorded on the episode so cost per episode is visible.
+
+``user`` may be a plain string or a list of content blocks (text + images),
+which is how the frame judge shows Claude the generated still next to the
+character reference sheets.
 """
 
 from __future__ import annotations
 
+import base64
+import io
 import logging
+from pathlib import Path
 from typing import TypeVar
 
 import anthropic
@@ -58,7 +65,7 @@ class Claude:
         model: str,
         effort: str,
         system: str,
-        user: str,
+        user: str | list[dict],
         output: type[T],
         max_tokens: int = 16000,
     ) -> tuple[T, LLMCall]:
@@ -91,6 +98,7 @@ class Claude:
             input_tokens=getattr(usage, "input_tokens", 0) or 0,
             output_tokens=getattr(usage, "output_tokens", 0) or 0,
             cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+            cache_write_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
             served_by=getattr(resp, "model", model) or model,
         )
         log.info(
@@ -108,3 +116,15 @@ class Claude:
         if parsed is None:
             raise LLMError(f"{purpose}: response did not contain a parsable {output.__name__}")
         return parsed, call
+
+
+def image_block(path: Path, max_side: int = 768) -> dict:
+    """An image content block, downscaled first: ~768px is plenty to judge a frame and cuts tokens ~4x."""
+    from PIL import Image
+
+    im = Image.open(path).convert("RGB")
+    im.thumbnail((max_side, max_side))
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=85)
+    data = base64.standard_b64encode(buf.getvalue()).decode()
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}

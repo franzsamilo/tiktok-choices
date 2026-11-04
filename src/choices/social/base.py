@@ -11,7 +11,7 @@ from typing import Protocol
 
 import httpx
 
-from ..models import Comment, PostRef
+from ..models import Comment, PostMetrics, PostRef
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +24,10 @@ class CommentSource(Protocol):
     platform: str
 
     def fetch(self, post_id: str) -> list[Comment]: ...
+
+
+class MetricsSource(Protocol):
+    def metrics(self, post_id: str) -> PostMetrics: ...
 
 
 class Publisher(Protocol):

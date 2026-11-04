@@ -124,7 +124,14 @@ def tally(
     for side, cs in side_comments.items():
         wordy = [c for c in cs if len(c.text.split()) >= 4 and not _INSTRUCTION.search(c.text) and not _LINK.search(c.text)]
         wordy.sort(key=lambda c: (c.likes, len(c.text)), reverse=True)
-        top[side] = [_quote(c.text) for c in wordy[:3]]
+        quotes: list[str] = []
+        for c in wordy:  # copy-pasted comments shouldn't fill every quote slot
+            q = _quote(c.text)
+            if q.lower() not in {x.lower() for x in quotes}:
+                quotes.append(q)
+            if len(quotes) == 3:
+                break
+        top[side] = quotes
 
     ambiguous = sum(1 for r in audit if r.vote.choice is None and r.vote.reason in ("conflict", "negated", "unclear"))
     llm_classified = sum(1 for _, v in best.values() if v.method == VoteMethod.LLM)

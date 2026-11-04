@@ -49,6 +49,59 @@ Everything stable (role, story bible, craft rules) is in the system prompt, buil
 ## 7. Defaults chosen for the real world
 
 - **Export mode by default.** Both platforms gate API publishing behind app review, so the pipeline produces a ready-to-post bundle, and `choices link` connects the posts afterwards.
-- **Ken Burns by default, image-to-video opt-in.** Motion on stills is far cheaper and good enough for most shots. Turn on `providers.video: fal` when the episode earns it.
+- **Image-to-video only where it earns its cost.** Hero shots get real motion; the rest get a slow camera move on the still (see §8).
 - **Comment voting, not poll stickers.** Poll-sticker results aren't available through either platform's API.
 - **TikTok-safe layout.** Nothing important goes in the bottom ~20% (caption UI) or the right-hand action rail.
+
+## 8. Cost is a first-class output
+
+Every paid call writes a `CostEntry`, and LLM spend is derived from the token usage already on each call, so every episode has an itemised bill on its review page and the series dashboard shows cost per 1K views. Three levers do most of the work (`choices estimate` prints the comparison from the live price table):
+
+| Setting | Projected $/episode |
+|---|---|
+| Stills + Ken Burns only | $0.95 |
+| **Hero shots animated (2 of 5), native audio off (default)** | **$3.19** |
+| Every shot animated, audio off | $6.55 |
+| Every shot animated, audio on | $9.35 |
+
+- **Hero shots.** The writer flags at most two shots where motion carries the moment; only those get image-to-video.
+- **Native audio off.** Narration is generated separately anyway, and it's what the captions are timed to.
+- **Clips sized to the shot.** Kling v3 bills whole seconds from 3 to 15, so a 7.4s shot costs 8s, not a padded 10s.
+
+A per-episode budget backs this up. The ledger is shared by the parallel workers and reserves money atomically before each optional spend (a re-roll, a clip). When the budget runs out, the pipeline *degrades*: it skips the remaining animation, keeps the episode, and writes the trade-off on the review page. The minimum episode (stills, voice, script) is never blocked.
+
+Offline runs price the mock calls as if they were the configured real models, so the dashboard, budget and estimates behave like production. They're always labelled *simulated*.
+
+## 9. A vision model checks every frame before it gets expensive
+
+Image models fail in ways no text check can see: six fingers, a garbled sign, the wrong face, a "safe" prompt that came back gory. The frame judge (Claude, vision, low effort, on a downscaled 768px JPEG) checks each still against the shot description, the character reference sheets and the content rules, *before* the still can become a ~$1 clip. A failed frame is re-rolled with a new seed plus the judge's one-line fix. If nothing passes, the best attempt is kept and flagged for the human, and it isn't animated. One check costs about $0.02; one skipped bad clip pays for roughly fifty.
+
+## 10. Reference images, not adjectives, for consistency
+
+`choices cast` generates one reference sheet per character, once. Every shot with that character goes to a multi-reference edit model (Nano Banana 2, up to 14 images) with the sheet attached, and the prompt maps "image 1 is Lola Cora". The locked text description stays as a second anchor, and the judge checks identity against the same sheet.
+
+## 11. Closing the loop with analytics
+
+Comments decide the story; analytics decide the craft. The pipeline pulls TikTok's per-second retention curve and Instagram's Reels skip rate and computes four KPIs per episode:
+
+- 3-second hold (the hook's report card),
+- completion (did they reach the choice card),
+- votes per 1K views (the format's engagement rate),
+- cost per 1K views.
+
+The best and worst hooks and the highest-voted dilemmas go into the next writer prompt as a `<performance_data>` block: measured data, labelled as data, never overriding the bible. It's deterministic and needs no extra LLM call. The review page shows exactly what the writer was told.
+
+## 12. One episode, many test creatives
+
+For paid distribution, the expensive assets (stills, clips, narration) don't change between creatives; only the hook text and aspect ratio do. `choices variants` writes alternative hooks in one low-effort call, each with a different angle (curiosity, threat, stakes, ...), written for cold audiences who don't know the characters and required to be true to the episode. It then re-renders 9:16, 4:5 and 1:1 cuts. Each format shares one picture and sound pass, and every hook only re-burns the overlay. Marginal media cost: $0.
+
+## 13. Why a workflow, not an autonomous agent
+
+The daily loop is a deterministic state machine with LLM calls at specific steps, not an open-ended agent with tools. For this job that's the better harness:
+
+- **Cost is bounded and predictable.** Every model call has a known purpose, effort level and budget line. An agent deciding for itself how many images to try has neither.
+- **It's auditable.** Each step leaves an artifact on disk, so "why did day 6 look like that?" has a file-level answer.
+- **Failures are local.** A timeout resumes at the failed step instead of re-planning the whole episode.
+- **Judgment goes where it's needed.** Models write, critique and judge frames, where language and vision matter; code counts, dedupes, prices and schedules, where it's exact.
+
+An agent would earn its place on open-ended work, like researching a new niche or exploring a series format from scratch. Deciding when an episode is good enough to publish stays with a human.

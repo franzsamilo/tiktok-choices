@@ -5,16 +5,26 @@ returns a ``request_id`` plus ``status_url`` and ``response_url``. Poll the
 status until ``COMPLETED``, then GET the response. Auth is
 ``Authorization: Key $FAL_KEY``.
 
-Model IDs are config (``models.fal_image`` / ``models.fal_video``) because the
-best image and video model changes every few weeks. Input field names differ
-slightly per model family; the payloads here follow the FLUX and Kling
-conventions on fal. Check the model's schema page when you switch families.
+Defaults (checked 2026-11-04, see docs/MODELS.md):
+
+* Images: Nano Banana 2 (``fal-ai/nano-banana-2``), with its ``/edit`` variant
+  for any shot that has a cast member. The edit endpoint accepts up to 14
+  ``image_urls``, so every shot is conditioned on the characters' reference
+  sheets instead of hoping a text description lands the same face twice.
+* Video: Kling v3 Pro image-to-video with ``generate_audio: false``. Native
+  audio bills about 1.5x per second, and the series has its own narration.
+  ``duration`` is a whole number of seconds from 3 to 15, so each clip is sized
+  to its shot rather than padded to a fixed 5s or 10s.
+
+Payload shapes differ per model family; the legacy FLUX/Kling-v2 shapes are
+kept so older model IDs still work.
 """
 
 from __future__ import annotations
 
 import base64
 import logging
+import math
 import mimetypes
 import time
 from pathlib import Path
@@ -61,16 +71,22 @@ class FalClient:
         return out
 
 
-def _data_uri(path: Path) -> str:
+def data_uri(path: Path) -> str:
     mime = mimetypes.guess_type(path.name)[0] or "image/png"
     return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
+
+
+def _aspect(width: int, height: int) -> str:
+    ratio = width / height
+    options = {"9:16": 9 / 16, "4:5": 4 / 5, "1:1": 1.0, "16:9": 16 / 9, "2:3": 2 / 3, "3:4": 3 / 4}
+    return min(options, key=lambda k: abs(options[k] - ratio))
 
 
 class FalImages:
     name = "fal"
 
-    def __init__(self, model: str, client: FalClient | None = None):
-        self.model = model
+    def __init__(self, model: str, edit_model: str = "", client: FalClient | None = None, max_refs: int = 14):
+        self.model, self.edit_model, self.max_refs = model, edit_model, max_refs
         self._client = client
 
     @property
@@ -79,31 +95,54 @@ class FalImages:
             self._client = FalClient()
         return self._client
 
-    def generate(self, prompt: str, negative: str, out: Path, *, seed: int, width: int, height: int) -> Path:
-        # Generate near 9:16 at a size the model handles natively; the renderer scales/crops.
-        payload = {
-            "prompt": prompt,
-            "image_size": {"width": 768, "height": 1344} if height > width else {"width": 1344, "height": 768},
+    def model_id(self, has_refs: bool) -> str:
+        return self.edit_model if has_refs and self.edit_model else self.model
+
+    def payload(self, model: str, prompt: str, negative: str, *, seed: int, width: int, height: int, refs: list[Path]) -> dict:
+        if "flux" in model and "/edit" not in model:
+            # Legacy FLUX text-to-image shape (no negative prompt support).
+            return {
+                "prompt": prompt,
+                "image_size": {"width": 768, "height": 1344} if height > width else {"width": 1344, "height": 768},
+                "num_images": 1,
+                "seed": seed,
+                "enable_safety_checker": True,
+            }
+        # Nano Banana family (Gemini image models on fal): no negative prompt
+        # field, so the constraints are folded into the prompt itself.
+        p: dict = {
+            "prompt": f"{prompt}. Avoid: {negative}" if negative else prompt,
+            "aspect_ratio": _aspect(width, height),
+            "resolution": "1K",
             "num_images": 1,
             "seed": seed,
-            "enable_safety_checker": True,
+            "output_format": "png",
         }
-        if negative and "flux" not in self.model:  # FLUX ignores negative prompts
-            payload["negative_prompt"] = negative
-        res = self.client.run(self.model, payload)
+        if refs:
+            p["image_urls"] = [data_uri(r) for r in refs[: self.max_refs]]
+        return p
+
+    def generate(
+        self, prompt: str, negative: str, out: Path, *, seed: int, width: int, height: int, refs: list[Path] | None = None
+    ) -> Path:
+        refs = list(refs or [])
+        model = self.model_id(bool(refs))
+        res = self.client.run(model, self.payload(model, prompt, negative, seed=seed, width=width, height=height, refs=refs if model == self.edit_model else []))
         images = res.get("images") or []
         if not images:
-            raise SourceError(f"fal {self.model}: no images in response")
+            raise SourceError(f"fal {model}: no images in response")
         if (res.get("has_nsfw_concepts") or [False])[0]:
-            raise SourceError(f"fal {self.model}: safety checker flagged the image; revise the scene's visual")
+            raise SourceError(f"fal {model}: safety checker flagged the image; revise the scene's visual")
         return self.client.download(images[0]["url"], out)
 
 
 class FalVideo:
     name = "fal"
 
-    def __init__(self, model: str, negative: str = "", client: FalClient | None = None):
-        self.model, self.negative = model, negative
+    def __init__(self, model: str, negative: str = "", audio: bool = False, client: FalClient | None = None,
+                 min_seconds: int = 3, max_seconds: int = 15):
+        self.model, self.negative, self.audio = model, negative, audio
+        self.min_seconds, self.max_seconds = min_seconds, max_seconds
         self._client = client
 
     @property
@@ -112,15 +151,23 @@ class FalVideo:
             self._client = FalClient()
         return self._client
 
-    def animate(self, image: Path, prompt: str, out: Path, *, seconds: float) -> Path:
-        payload = {
-            "prompt": prompt,
-            "image_url": _data_uri(image),
-            "duration": "10" if seconds > 5.5 else "5",
-        }
+    def billed_seconds(self, seconds: float) -> int:
+        if "kling-video/v3" in self.model or "kling-video/o3" in self.model:
+            return max(self.min_seconds, min(self.max_seconds, math.ceil(seconds)))
+        return 10 if seconds > 5.5 else 5  # older models only take 5 or 10
+
+    def payload(self, image: Path, prompt: str, seconds: float) -> dict:
+        dur = str(self.billed_seconds(seconds))
+        if "kling-video/v3" in self.model or "kling-video/o3" in self.model:
+            p = {"prompt": prompt, "start_image_url": data_uri(image), "duration": dur, "generate_audio": self.audio}
+        else:
+            p = {"prompt": prompt, "image_url": data_uri(image), "duration": dur}
         if self.negative:
-            payload["negative_prompt"] = self.negative
-        res = self.client.run(self.model, payload)
+            p["negative_prompt"] = self.negative
+        return p
+
+    def animate(self, image: Path, prompt: str, out: Path, *, seconds: float) -> Path:
+        res = self.client.run(self.model, self.payload(image, prompt, seconds))
         video = res.get("video") or {}
         if not video.get("url"):
             raise SourceError(f"fal {self.model}: no video in response")

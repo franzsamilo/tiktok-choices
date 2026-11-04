@@ -71,6 +71,7 @@ Visual direction. Each scene becomes one AI-generated vertical still, which is t
 - Refer to recurring characters by name and list them in `characters`. The pipeline injects their locked appearance, so don't describe their faces or clothes yourself.
 - Avoid what image models render badly: legible text and signage, crowds of detailed faces, hands doing fine manipulation.
 - Show danger through framing, silhouettes and reactions. Never show gore or a bite.
+- Set `hero` to true on at most two shots where real motion carries the moment, such as people running, a door swinging open or rain lashing a face. Only hero shots get full image-to-video, which costs real money; the rest get a slow camera move over the still, so a quiet shot shouldn't be a hero.
 
 Length budget:
 - Write {cfg.min_scenes} to {cfg.max_scenes} scenes, with {lo} to {hi} words of narration across all of them (about {cfg.target_seconds} seconds at {cfg.words_per_second} words per second). The narrator reads the `question` separately over the choice card, so don't repeat it in the last scene. End the last scene on the moment of decision.
@@ -94,8 +95,11 @@ def writer_user(
     outcome: Outcome | None,
     feedback: list[str],
     previous_draft: EpisodeScript | None,
+    performance: str = "",
 ) -> str:
     parts = [f"<canon>\n{canon}\n</canon>", f"<story_so_far>\n{history}\n</story_so_far>"]
+    if performance:
+        parts.append(f"<performance_data>\n{performance}\n</performance_data>")
 
     if outcome is None:
         parts.append(

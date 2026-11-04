@@ -159,12 +159,21 @@ def render_episode(
     cfg: RenderConfig,
     out_dir: Path,
     window_hours: float = 24,
+    hook: str | None = None,
+    work_dir: Path | None = None,
+    final_name: str = "final.mp4",
+    reuse: bool = False,
+    make_cover: bool = True,
 ) -> RenderResult:
+    """Render one cut. Variants pass ``hook``/``work_dir``/``reuse`` so every hook
+    of the same aspect ratio shares one picture and sound pass and only re-burns
+    the overlay."""
     require_ffmpeg()
     if len(scenes) != len(script.scenes):
         raise RenderError(f"{len(scenes)} media inputs for {len(script.scenes)} scenes")
-    work = out_dir / "render"
+    work = work_dir or (out_dir / "render")
     work.mkdir(parents=True, exist_ok=True)
+    hook_text = script.hook if hook is None else hook
 
     # 1. Timeline driven by narration length.
     timings: list[SceneTiming] = []
@@ -177,45 +186,46 @@ def render_episode(
     card_dur = round(max(cfg.choice_card_seconds, cta_voice.duration + 0.8), 3)
     total = round(card_start + card_dur, 3)
 
-    # 2. Picture segments.
-    segs: list[Path] = []
-    for i, (sc, tm) in enumerate(zip(scenes, timings, strict=False)):
-        seg = work / f"seg{i + 1:02d}.mp4"
-        if sc.clip and sc.clip.exists():
-            _clip_segment(sc.clip, seg, tm.duration, cfg)
-        else:
-            _ken_burns(sc.image, seg, tm.duration, MOVES[i % len(MOVES)], cfg)
-        segs.append(seg)
-
-    overlay = cards.choice_card(script, day, cfg.width, cfg.height, work / "card.png", window_hours)
-    backdrop = cards.blurred_backdrop(scenes[-1].image, cfg.width, cfg.height, work / "card_bg.png")
-    card_seg = work / "seg_card.mp4"
-    _card_segment(backdrop, overlay, card_seg, card_dur, cfg)
-    segs.append(card_seg)
-
-    listing = work / "segments.txt"
-    listing.write_text("".join(f"file '{p.name}'\n" for p in segs), encoding="utf-8")
     picture = work / "picture.mp4"
-    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listing.name, "-c", "copy", picture.name], cwd=work)
-
-    # 3. Sound.
-    voices = [(Path(sc.voice.path), tm.start + 0.12) for sc, tm in zip(scenes, timings, strict=False)]
-    voices.append((Path(cta_voice.path), card_start + 0.35))
     audio = work / "mix.m4a"
-    _audio_mix(voices, total, card_start, audio, cfg)
+    if not (reuse and picture.exists() and audio.exists()):
+        # 2. Picture segments.
+        segs: list[Path] = []
+        for i, (sc, tm) in enumerate(zip(scenes, timings, strict=False)):
+            seg = work / f"seg{i + 1:02d}.mp4"
+            if sc.clip and sc.clip.exists():
+                _clip_segment(sc.clip, seg, tm.duration, cfg)
+            else:
+                _ken_burns(sc.image, seg, tm.duration, MOVES[i % len(MOVES)], cfg)
+            segs.append(seg)
+
+        overlay = cards.choice_card(script, day, cfg.width, cfg.height, work / "card.png", window_hours)
+        backdrop = cards.blurred_backdrop(scenes[-1].image, cfg.width, cfg.height, work / "card_bg.png")
+        card_seg = work / "seg_card.mp4"
+        _card_segment(backdrop, overlay, card_seg, card_dur, cfg)
+        segs.append(card_seg)
+
+        listing = work / "segments.txt"
+        listing.write_text("".join(f"file '{p.name}'\n" for p in segs), encoding="utf-8")
+        run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listing.name, "-c", "copy", picture.name], cwd=work)
+
+        # 3. Sound.
+        voices = [(Path(sc.voice.path), tm.start + 0.12) for sc, tm in zip(scenes, timings, strict=False)]
+        voices.append((Path(cta_voice.path), card_start + 0.35))
+        _audio_mix(voices, total, card_start, audio, cfg)
 
     # 4. Captions (scene narration only; the card shows the question as text).
     words: list[WordTiming] = []
     for sc, tm in zip(scenes, timings, strict=False):
         off = tm.start + 0.12
         words += [WordTiming(word=w.word, start=w.start + off, end=w.end + off) for w in sc.voice.words]
-    ass = work / "captions.ass"
+    ass = work / f"{Path(final_name).stem}.ass"
     ass.write_text(
         build_ass(
             width=cfg.width,
             height=cfg.height,
             words=words,
-            hook=script.hook,
+            hook=hook_text,
             hook_seconds=cfg.hook_seconds,
             badge=f"{series_title.upper()} · DAY {day}",
             words_per_chunk=cfg.caption_words_per_chunk,
@@ -225,7 +235,8 @@ def render_episode(
     )
 
     # 5. Final encode: burn captions, mux audio, web-optimised.
-    final = out_dir / "final.mp4"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    final = out_dir / final_name
     vf = f"subtitles=filename={filter_path(ass)}:fontsdir={filter_path(FONTS_DIR)}"
     run([
         "ffmpeg", "-y", "-i", str(picture), "-i", str(audio), "-vf", vf,
@@ -234,6 +245,8 @@ def render_episode(
         "-movflags", "+faststart", str(final),
     ])
 
-    cover = cards.cover(scenes[0].image, script, day, series_title, cfg.width, cfg.height, out_dir / "cover.jpg")
+    cover = out_dir / "cover.jpg"
+    if make_cover:
+        cards.cover(scenes[0].image, script, day, series_title, cfg.width, cfg.height, cover)
     log.info("rendered %s (%.1fs)", final, total)
     return RenderResult(video=final, cover=cover, timings=timings, duration=total)

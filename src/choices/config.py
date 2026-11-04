@@ -64,21 +64,83 @@ class ProviderConfig(BaseModel):
     critic: Literal["claude", "rules"] = "claude"
     vote_classifier: Literal["claude", "none"] = "claude"
     image: Literal["fal", "mock"] = "mock"
-    video: Literal["fal", "none"] = "none"
+    video: Literal["fal", "mock", "none"] = "none"
     voice: Literal["elevenlabs", "mock"] = "mock"
+    frame_judge: Literal["claude", "mock", "none"] = "claude"
+    hooks: Literal["claude", "mock"] = "claude"
+
+
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
 class ModelConfig(BaseModel):
     writer: str = "claude-opus-5-5"
-    writer_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    writer_effort: Effort = "high"
     critic: str = "claude-opus-5-5"
-    critic_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    critic_effort: Effort = "medium"
     vote_classifier: str = "claude-opus-5-5"
-    vote_classifier_effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
-    fal_image: str = "fal-ai/flux/dev"
-    fal_video: str = "fal-ai/kling-video/v2.1/standard/image-to-video"
+    vote_classifier_effort: Effort = "low"
+    frame_judge: str = "claude-opus-5-5"
+    frame_judge_effort: Effort = "low"
+    hooks: str = "claude-opus-5-5"
+    hooks_effort: Effort = "low"
+    fal_image: str = "fal-ai/nano-banana-2"  # text-to-image (shots with no recurring character)
+    fal_image_edit: str = "fal-ai/nano-banana-2/edit"  # multi-reference (shots with cast members)
+    fal_video: str = "fal-ai/kling-video/v3/pro/image-to-video"
+    fal_video_audio: bool = False  # we narrate separately; native audio costs ~50% more per second
     elevenlabs_model: str = "eleven_multilingual_v2"
     elevenlabs_voice_id: str = ""
+
+
+class LLMPrice(BaseModel):
+    input: float  # USD per million tokens
+    output: float
+    cache_read: float
+    cache_write: float
+
+
+class Pricing(BaseModel):
+    """Unit prices used for the cost ledger, budget guard and `choices estimate`.
+
+    Prices change. ``checked`` records when these were last verified; update
+    them from each provider's pricing page.
+    """
+
+    checked: str = "unverified"
+    llm: dict[str, LLMPrice] = Field(default_factory=dict)
+    image: dict[str, float] = Field(default_factory=dict)  # USD per image
+    video: dict[str, float] = Field(default_factory=dict)  # USD per second
+    video_audio_multiplier: float = 1.5
+    voice: dict[str, float] = Field(default_factory=dict)  # USD per 1,000 characters
+
+
+class BudgetConfig(BaseModel):
+    max_usd_per_episode: float = 4.0
+    on_exceed: Literal["degrade", "stop"] = "degrade"  # degrade = skip animation / rerolls, keep the episode
+
+
+class VideoPolicy(BaseModel):
+    animate: Literal["hero", "all", "none"] = "hero"
+    max_clips: int = 2  # hero shots per episode; the rest get Ken Burns motion
+    min_seconds: int = 3
+    max_seconds: int = 15
+
+
+class QAConfig(BaseModel):
+    enabled: bool = True
+    min_score: int = 3  # 1-5; frames below this are re-rolled
+    max_rerolls: int = 2
+
+
+class MetricsConfig(BaseModel):
+    track_days: int = 7  # keep refreshing a post's analytics this long after publishing
+    refresh_hours: float = 6
+    learn_from_last: int = 20  # episodes considered for the "what worked" digest
+    min_episodes_to_learn: int = 2
+
+
+class NotifyConfig(BaseModel):
+    webhook_url_env: str = "REVIEW_WEBHOOK_URL"  # Slack or Discord incoming webhook
 
 
 class WritingConfig(BaseModel):
@@ -150,13 +212,25 @@ class PipelineConfig(BaseModel):
     tiktok: TikTokConfig = TikTokConfig()
     instagram: InstagramConfig = InstagramConfig()
     publish: PublishConfig = PublishConfig()
+    pricing: Pricing = Pricing()
+    budget: BudgetConfig = BudgetConfig()
+    video: VideoPolicy = VideoPolicy()
+    qa: QAConfig = QAConfig()
+    metrics: MetricsConfig = MetricsConfig()
+    notify: NotifyConfig = NotifyConfig()
+    # Offline runs price the mock calls as if they were the configured real
+    # models, so dashboards and budgets behave like production. Always labelled.
+    simulate_costs: bool = False
 
     def offline(self) -> PipelineConfig:
         """A copy with every paid/networked provider swapped for its local stand-in."""
         cfg = self.model_copy(deep=True)
         cfg.providers = ProviderConfig(
-            writer="mock", critic="rules", vote_classifier="none", image="mock", video="none", voice="mock"
+            writer="mock", critic="rules", vote_classifier="none", image="mock",
+            video="mock" if self.providers.video != "none" else "none", voice="mock",
+            frame_judge="mock" if self.providers.frame_judge != "none" else "none", hooks="mock",
         )
+        cfg.simulate_costs = True
         cfg.tiktok.enabled = False
         cfg.instagram.enabled = False
         cfg.publish.mode = "export"

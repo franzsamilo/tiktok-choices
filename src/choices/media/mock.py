@@ -47,9 +47,19 @@ def _palette(prompt: str) -> tuple:
 
 
 class MockImages:
+    """Procedural stand-in. ``model``/``edit_model`` only name what it stands in for (for simulated pricing)."""
+
     name = "mock"
 
-    def generate(self, prompt: str, negative: str, out: Path, *, seed: int, width: int, height: int) -> Path:
+    def __init__(self, model: str = "mock", edit_model: str = "mock"):
+        self.model, self.edit_model = model, edit_model
+
+    def model_id(self, has_refs: bool) -> str:
+        return self.edit_model if has_refs else self.model
+
+    def generate(
+        self, prompt: str, negative: str, out: Path, *, seed: int, width: int, height: int, refs: list[Path] | None = None
+    ) -> Path:
         out.parent.mkdir(parents=True, exist_ok=True)
         rng = random.Random(seed)
         w, h = width, height
@@ -150,8 +160,8 @@ class MockVoice:
 
     name = "mock"
 
-    def __init__(self, words_per_second: float = 2.6):
-        self.wps = words_per_second
+    def __init__(self, words_per_second: float = 2.6, model: str = "mock"):
+        self.wps, self.model = words_per_second, model
 
     def synthesize(self, text: str, out: Path) -> VoiceResult:
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -172,3 +182,31 @@ class MockVoice:
 
 def stable_seed(*parts: object) -> int:
     return int(hashlib.sha1("|".join(map(str, parts)).encode()).hexdigest()[:8], 16)
+
+
+class MockVideo:
+    """Offline image-to-video: a faster, handheld-feeling move so hero shots visibly differ from Ken Burns stills."""
+
+    name = "mock"
+
+    def __init__(self, model: str = "mock", audio: bool = False, min_seconds: int = 3, max_seconds: int = 15,
+                 width: int = 1080, height: int = 1920, fps: int = 30):
+        self.model, self.audio = model, audio
+        self.min_seconds, self.max_seconds = min_seconds, max_seconds
+        self.width, self.height, self.fps = width, height, fps
+
+    def billed_seconds(self, seconds: float) -> int:
+        return max(self.min_seconds, min(self.max_seconds, math.ceil(seconds)))
+
+    def animate(self, image: Path, prompt: str, out: Path, *, seconds: float) -> Path:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        w, h, fps = self.width, self.height, self.fps
+        frames = max(1, round(seconds * fps))
+        z = f"1.0+0.22*on/{frames}"
+        x = f"iw/2-iw/zoom/2+{w // 90}*sin(on/5)"
+        y = f"ih/2-ih/zoom/2+{h // 160}*cos(on/7)"
+        vf = (f"scale={w * 2}:{h * 2}:force_original_aspect_ratio=increase,crop={w * 2}:{h * 2},"
+              f"zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={w}x{h}:fps={fps},eq=contrast=1.06,format=yuv420p")
+        run(["ffmpeg", "-y", "-i", str(image), "-vf", vf, "-frames:v", str(frames),
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-an", str(out)])
+        return out

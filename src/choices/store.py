@@ -62,6 +62,12 @@ class Store:
     def cta_audio(self, day: int) -> Path:
         return self.day_dir(day) / "audio" / "cta.mp3"
 
+    def cast_image(self, name: str) -> Path:
+        slug = "".join(ch if ch.isalnum() else "-" for ch in name.lower()).strip("-")
+        d = self.root / "cast"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / f"{slug}.png"
+
     def final_video(self, day: int) -> Path:
         return self.day_dir(day) / "final.mp4"
 

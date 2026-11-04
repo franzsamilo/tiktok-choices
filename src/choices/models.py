@@ -43,6 +43,11 @@ class Scene(BaseModel):
     )
     motion: str = Field(description="One short camera/subject motion cue for image-to-video, e.g. 'slow push-in'.")
     characters: list[str] = Field(description="Names of recurring characters visible in this shot (may be empty).")
+    hero: bool = Field(
+        default=False,
+        description="True for at most two shots where real motion matters most (usually the opening hook shot and "
+        "the climax). Only hero shots are animated with image-to-video; the rest get a slow camera move."
+    )
 
 
 class ChoiceOption(BaseModel):
@@ -224,13 +229,73 @@ class LLMCall(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     served_by: str = ""
+    simulated: bool = False
 
 
 class SceneTiming(BaseModel):
     index: int
     start: float
     duration: float
+
+
+class CostEntry(BaseModel):
+    stage: str  # image, video, voice, writer, critic, frame-judge, vote-classifier, hooks, ...
+    provider: str
+    model: str
+    quantity: float
+    unit: str  # image | second | chars
+    usd: float
+    note: str = ""
+    simulated: bool = False
+
+
+class FrameVerdict(BaseModel):
+    """Structured output of the vision judge for one generated frame."""
+
+    matches_shot: bool = Field(description="True if the image shows what the shot description asks for.")
+    characters_match: bool = Field(
+        description="True if every recurring character looks like their reference/description, or none are in the shot."
+    )
+    artifacts: list[str] = Field(description="Visible defects: extra fingers, melted faces, garbled text, watermarks...")
+    unsafe: bool = Field(description="True if it shows gore, blood, injury close-ups or anything not 13+ safe.")
+    score: int = Field(description="1-5: how usable this is as a frame of the series. 3 = acceptable.")
+    fix: str = Field(description="One short phrase to add to the image prompt to fix the main problem, or ''.")
+
+
+class FrameQA(BaseModel):
+    scene: int
+    attempts: int
+    passed: bool
+    score: int | None = None
+    notes: list[str] = []
+    judged: bool = True
+    simulated: bool = False
+
+
+class PostMetrics(BaseModel):
+    platform: Platform
+    post_id: str
+    captured_at: datetime = Field(default_factory=utcnow)
+    source: Literal["api", "simulated", "manual"] = "api"
+    views: int = 0
+    reach: int | None = None
+    likes: int = 0
+    comments: int = 0
+    shares: int = 0
+    saves: int = 0
+    avg_watch_seconds: float | None = None
+    completion_rate: float | None = None  # 0-1, watched to the end
+    hold_3s: float | None = None  # 0-1, still watching at 3 seconds (hook strength)
+    skip_rate: float | None = None  # 0-1, swiped away early (Instagram)
+
+
+class Variant(BaseModel):
+    angle: str
+    hook: str
+    format: str
+    path: str
 
 
 class EpisodeRecord(BaseModel):
@@ -245,6 +310,13 @@ class EpisodeRecord(BaseModel):
     tally: TallyResult | None = None
     timings: list[SceneTiming] = []
     llm_calls: list[LLMCall] = []
+    costs: list[CostEntry] = []  # media spend; LLM spend is derived from llm_calls
+    hero_scenes: list[int] = []
+    frame_qa: list[FrameQA] = []
+    decisions: list[str] = []  # automatic trade-offs the pipeline made (budget, fallbacks)
+    metrics: dict[str, PostMetrics] = {}
+    variants: list[Variant] = []
+    performance_digest: str = ""  # what the writer was told about past performance
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

@@ -36,6 +36,7 @@ def _pilot() -> EpisodeScript:
                 visual="wide shot of the rainy alley, motion-blurred silhouettes sprinting toward a rooster on a rusted corrugated tin roof",
                 motion="fast whip pan",
                 characters=[],
+                hero=True,
             ),
             Scene(
                 narration="A knock. Soft. Three times. Through the gap in the door you see a boy in a yellow rider jacket, soaked and shaking, a finger to his lips.",
@@ -102,6 +103,7 @@ def _day2_opened() -> EpisodeScript:
                 visual="dark narrow hallway, Lola Cora's hand over Migs's mouth, both pressed against a wall, grey rain light spilling from the doorway",
                 motion="handheld tremble",
                 characters=["Migs", "Lola Cora"],
+                hero=True,
             ),
             Scene(
                 narration="Something stands on the other side of the door. The rain covers your heartbeat. After a long minute, it goes still.",
@@ -267,9 +269,27 @@ def _generic(req: WriteRequest) -> EpisodeScript:
 
 
 class MockWriter:
-    """Offline stand-in for ClaudeWriter with the same interface."""
+    """Offline stand-in for ClaudeWriter with the same interface.
+
+    With ``simulate_model`` set, each draft reports the token usage a real
+    writer call typically has, so offline cost dashboards aren't all zeros.
+    """
+
+    def __init__(self, simulate_model: str | None = None):
+        self.simulate_model = simulate_model
+
+    def _call(self, revision: bool) -> LLMCall | None:
+        if not self.simulate_model:
+            return None
+        return LLMCall(purpose="writer-revision" if revision else "writer", model=self.simulate_model,
+                       input_tokens=4200, output_tokens=6500, cache_read_tokens=3100,
+                       served_by="simulated", simulated=True)
 
     def write(self, req: WriteRequest) -> tuple[EpisodeScript, LLMCall | None]:
+        script, _ = self._script(req)
+        return script, self._call(req.previous_draft is not None)
+
+    def _script(self, req: WriteRequest) -> tuple[EpisodeScript, None]:
         if req.day == 1 or req.outcome is None:
             script = _pilot()
         elif req.day == 2 and req.outcome.chosen_label == "OPEN THE DOOR":

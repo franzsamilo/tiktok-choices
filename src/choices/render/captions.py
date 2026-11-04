@@ -70,7 +70,7 @@ def build_ass(
     words_per_chunk: int = 3,
     caption_until: float | None = None,
 ) -> str:
-    s = width / 1080
+    s = min(width / 1080, height / 1350)  # tighter dimension, so 4:5 and 1:1 cuts scale down
     fs = int(84 * s)
     header = f"""[Script Info]
 ScriptType: v4.00+

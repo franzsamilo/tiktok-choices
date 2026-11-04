@@ -60,13 +60,14 @@ def _spaced(draw, xy, text, font, fill, tracking: float) -> None:
 
 def choice_card(script: EpisodeScript, day: int, width: int, height: int, out: Path, window_hours: float = 24) -> Path:
     """Transparent full-frame overlay drawn on top of the blurred last shot."""
-    s = width / 1080
+    # Scale to whichever is tighter so 4:5 and 1:1 ad cuts fit too.
+    s = min(width / 1080, height / 1350)
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    left = int(80 * s)
+    left = int(80 * width / 1080)
     col_w = int(width * 0.80) - left  # stay clear of the right-hand action rail
 
-    y = int(height * 0.17)
+    y = int(height * (0.17 if height / width > 1.5 else 0.08))
     _spaced(d, (left, y), f"DAY {day}  ·  YOU DECIDE", _font("semibold", int(34 * s)), AMBER, 4 * s)
     y += int(70 * s)
 

@@ -13,6 +13,12 @@ public ``video_url``, wait for ``status_code == FINISHED``, then
 
 As with TikTok, poll/quiz sticker results aren't readable through the API,
 so votes come from comments.
+
+Analytics: ``GET /{ig-media-id}/insights?metric=...`` (needs
+``instagram_manage_insights``). ``reels_skip_rate`` is the Reels hook metric.
+Several Reels metrics are marked "in development", and asking for one the
+media doesn't support fails the whole request, so the call falls back to a
+core set on error.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ from pathlib import Path
 import httpx
 
 from ..config import InstagramConfig
-from ..models import Comment, PostRef
+from ..models import Comment, PostMetrics, PostRef
 from .base import SourceError, env, parse_time, request_json
 
 log = logging.getLogger(__name__)
@@ -118,3 +124,37 @@ class InstagramGraph:
             raise SourceError(f"Instagram publish failed: {pub}")
         link = self._get(f"{self.base}/{media_id}", {"fields": "permalink"}).get("permalink", "")
         return PostRef(platform="instagram", post_id=str(media_id), url=link)
+
+    # ---- analytics -----------------------------------------------------------
+    FULL = "views,reach,likes,comments,shares,saved,ig_reels_avg_watch_time,reels_skip_rate"
+    CORE = "reach,likes,comments,shares,saved"
+
+    def metrics(self, post_id: str) -> PostMetrics:
+        try:
+            body = self._get(f"{self.base}/{post_id}/insights", {"metric": self.FULL})
+        except SourceError as e:
+            log.warning("instagram %s: full insights failed (%s); retrying core metrics", post_id, e)
+            body = self._get(f"{self.base}/{post_id}/insights", {"metric": self.CORE})
+        vals: dict[str, float] = {}
+        for item in body.get("data", []):
+            values = item.get("values") or []
+            if values:
+                vals[item.get("name", "")] = values[0].get("value") or 0
+            elif "total_value" in item:
+                vals[item.get("name", "")] = (item["total_value"] or {}).get("value") or 0
+        skip = vals.get("reels_skip_rate")
+        skip = (skip / 100 if skip > 1 else skip) if skip is not None else None
+        avg_ms = vals.get("ig_reels_avg_watch_time")
+        return PostMetrics(
+            platform="instagram",
+            post_id=post_id,
+            views=int(vals.get("views") or vals.get("reach") or 0),
+            reach=int(vals["reach"]) if "reach" in vals else None,
+            likes=int(vals.get("likes") or 0),
+            comments=int(vals.get("comments") or 0),
+            shares=int(vals.get("shares") or 0),
+            saves=int(vals.get("saved") or 0),
+            avg_watch_seconds=avg_ms / 1000 if avg_ms is not None else None,  # reported in milliseconds
+            skip_rate=skip,
+            hold_3s=1 - skip if skip is not None else None,
+        )

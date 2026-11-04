@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 CSS = """
 :root{--bg:#0d0f12;--panel:#15181d;--line:#262b33;--text:#e8eaed;--muted:#9aa3ad;--amber:#ffc45c;--a:#e5484d;--b:#12a594;--ok:#3dd68c;--warn:#f5a524;--bad:#ff6369}
-@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--bg:#f6f7f9;--panel:#fff;--line:#e3e6ea;--text:#16191d;--muted:#5d6670}}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--bg:#f6f7f9;--panel:#fff;--line:#e3e6ea;--text:#16191d;--muted:#5d6670;--amber:#9a5b00;--warn:#9a5b00;--ok:#13804b;--bad:#c62f35}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 Inter,system-ui,-apple-system,Segoe UI,sans-serif}
 main{max-width:1180px;margin:0 auto;padding:28px 16px 64px}
 a{color:var(--amber)}h1{font-size:28px;margin:4px 0 6px;letter-spacing:-.01em}h2{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
@@ -43,6 +43,10 @@ pre,code{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}pre{backgro
 table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:6px 8px;border-top:1px solid var(--line)}th{color:var(--muted);font-weight:600}
 .days{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}.day{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;text-decoration:none;color:inherit}
 .day img{width:100%;aspect-ratio:9/16;object-fit:cover;display:block}.day .body{padding:10px 12px}
+.tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border-radius:6px;padding:1px 6px;margin-right:6px;border:1px solid var(--line)}
+.tag.hero{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 45%,transparent)}
+.tag.qa-ok{color:var(--ok)}.tag.qa-bad{color:var(--bad)}
+.vars{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}.vars a{display:block;padding:8px 10px;border:1px solid var(--line);border-radius:10px;text-decoration:none;color:inherit}
 """
 
 
@@ -141,18 +145,81 @@ def write_review_page(pipe: Pipeline, ep: EpisodeRecord) -> None:
         )
 
     timings = {t.index: t for t in ep.timings}
+    qa_by_scene = {q.scene: q for q in ep.frame_qa}
     scenes = ""
     for i, sc in enumerate(s.scenes):
         p = prompts.get(i + 1, {})
         tm = timings.get(i)
         when = f"{tm.start:.1f}s, {tm.duration:.1f}s long" if tm else ""
         chars = f' · {escape(", ".join(sc.characters))}' if sc.characters else ""
+        tags = '<span class="tag hero">animated</span>' if i in ep.hero_scenes else ""
+        qa = qa_by_scene.get(i + 1)
+        qa_notes = ""
+        if qa and qa.judged:
+            label = f"QA {qa.score}/5" if qa.score is not None else "QA"
+            label += f" · {qa.attempts} tries" if qa.attempts > 1 else ""
+            label += " (sim)" if qa.simulated else ""
+            tags += f'<span class="tag {"qa-ok" if qa.passed else "qa-bad"}">{escape(label)}</span>'
+            if qa.notes and qa.attempts > 1:
+                qa_notes = f'<div class="small muted">{escape(" → ".join(qa.notes))}</div>'
+        refs = p.get("references") or []
+        ref_note = f'<div class="small muted">References: {escape(", ".join(refs))}</div>' if refs else ""
         scenes += (
             f'<article class="scene"><img loading="lazy" src="scenes/{i + 1:02d}.png" alt="Scene {i + 1}">'
-            f'<div class="body"><div class="small muted">Scene {i + 1} · {when}{chars}</div><p>{escape(sc.narration)}</p>'
+            f'<div class="body"><div>{tags}</div><div class="small muted">Scene {i + 1} · {when}{chars}</div>{qa_notes}{ref_note}<p>{escape(sc.narration)}</p>'
             f'<details><summary>Image prompt</summary><pre>{escape(p.get("image", sc.visual))}</pre></details>'
             f'<details><summary>Motion</summary><pre>{escape(p.get("motion", sc.motion))}</pre></details></div></article>'
         )
+
+    from .costs import breakdown, total
+
+    cost_rows = "".join(
+        f"<tr><td>{escape(k)}</td><td style='text-align:right'>${v:.3f}</td></tr>" for k, v in breakdown(ep, pipe.cfg.pricing).items()
+    )
+    spent = total(ep, pipe.cfg.pricing)
+    simulated = any(c.simulated for c in ep.costs) or any(c.simulated for c in ep.llm_calls)
+    sim_note = '<p class="small" style="color:var(--warn)">Simulated: offline run priced as if live.</p>' if simulated else ""
+    decisions = "".join(f"<li>{escape(d)}</li>" for d in ep.decisions)
+    decisions_html = f'<p class="small muted">Automatic trade-offs</p><ul class="small">{decisions}</ul>' if decisions else ""
+    cost_html = (
+        f'<section class="panel"><h2>Cost</h2>{sim_note}<p><b>${spent:.2f}</b> of a ${pipe.cfg.budget.max_usd_per_episode:.2f} budget'
+        f'{" · hero shots: " + ", ".join(str(i + 1) for i in ep.hero_scenes) if ep.hero_scenes else ""}</p>'
+        f"<table>{cost_rows}</table>{decisions_html}</section>"
+        if cost_rows
+        else ""
+    )
+
+    metrics_html = ""
+    if ep.metrics:
+        mrows = "".join(
+            f"<tr><td>{escape(m.platform)}{' (simulated)' if m.source == 'simulated' else ''}</td><td>{m.views:,}</td>"
+            f"<td>{(f'{m.hold_3s:.0%}' if m.hold_3s is not None else '–')}</td>"
+            f"<td>{(f'{m.completion_rate:.0%}' if m.completion_rate is not None else '–')}</td>"
+            f"<td>{m.comments:,}</td><td>{m.shares:,}</td></tr>"
+            for m in ep.metrics.values()
+        )
+        metrics_html = (
+            '<section class="panel"><h2>Analytics</h2><table><tr><th>Platform</th><th>Views</th><th>Hold@3s</th>'
+            f"<th>Completion</th><th>Comments</th><th>Shares</th></tr>{mrows}</table></section>"
+        )
+
+    variants_html = ""
+    if ep.variants:
+        links = "".join(
+            f'<a href="{escape(v.path)}"><span class="small muted">{escape(v.format)} · {escape(v.angle)}</span>'
+            f"<div>{escape(v.hook)}</div></a>"
+            for v in ep.variants
+        )
+        variants_html = (
+            f'<section class="panel"><h2>Ad variants ({len(ep.variants)})</h2><p class="small muted">Hooks x formats from '
+            f'the same media: no new image, video or voice spend.</p><div class="vars">{links}</div></section>'
+        )
+
+    digest_html = (
+        f'<section class="panel"><h2>What the writer was told</h2><pre>{escape(ep.performance_digest)}</pre></section>'
+        if ep.performance_digest
+        else ""
+    )
 
     calls = "".join(
         f"<tr><td>{escape(c.purpose)}</td><td>{escape(c.served_by or c.model)}</td><td>{c.input_tokens:,}</td>"
@@ -174,10 +241,11 @@ def write_review_page(pipe: Pipeline, ep: EpisodeRecord) -> None:
 <div class="grid"><div>{video}<p class="small muted">Hook: “{escape(s.hook)}”</p></div>
 <div>{prev}<section class="panel"><h2>The choice</h2><p class="q">{escape(s.question)}</p>{opts}</section>
 {_tally_html(ep)}{cmds}
-<section class="panel"><h2>Automated review</h2>{critic}<ul class="issues">{issues}</ul></section>{notes_html}</div></div>
+<section class="panel"><h2>Automated review</h2>{critic}<ul class="issues">{issues}</ul></section>{notes_html}
+{cost_html}{metrics_html}</div></div>{variants_html}
 <h2 style="margin-top:12px">Scenes</h2><div class="scenes">{scenes}</div>
 <section class="panel" style="margin-top:20px"><h2>Caption</h2><p>{escape(s.caption)}</p><p class="small muted">{escape(" ".join("#" + h for h in s.hashtags))}</p></section>
-{calls_html}"""
+{digest_html}{calls_html}"""
     (d / "review.html").write_text(_page(f"{pipe.bible.title} · Day {ep.day}", body), encoding="utf-8")
 
 
@@ -198,11 +266,14 @@ def write_index(pipe: Pipeline) -> None:
             f'<div class="body"><div class="small muted">Day {day} · {escape(ep.status.value.replace("_", " "))}</div>'
             f"<b>{escape(ep.script.title)}</b><div class=\"small muted\">{escape(ep.script.question)}</div>{result}</div></a>"
         )
+    from .dashboard import dashboard_html
+
     st = pipe.state()
     body = (
         f'<div class="eyebrow">Series</div><h1>{escape(pipe.bible.title)}</h1>'
         f'<p class="muted">{escape(pipe.bible.logline)}</p>'
         f'<div class="pills"><span class="pill">{len(pipe.store.episode_days())} episodes</span>'
-        f'<span class="pill">Now: {escape(st.location)}</span></div><div class="days">{cards}</div>'
+        f'<span class="pill">Now: {escape(st.location)}</span></div>'
+        f"{dashboard_html(pipe, pipe.kpis())}<h2>Episodes</h2><div class=\"days\">{cards}</div>"
     )
     (pipe.store.root / "index.html").write_text(_page(pipe.bible.title, body), encoding="utf-8")

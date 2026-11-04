@@ -13,10 +13,16 @@ Notes from building this:
   non-zero ``code`` is an error even on HTTP 200.
 * Field names drift between API versions (``user_id`` is being replaced by
   ``unique_identifier``), so the mapping below tolerates either.
+
+Analytics: ``GET business/video/list/`` with a JSON ``fields`` list and a
+``filters`` object of ``video_ids``. It returns views, reach, average watch
+time, full-watch rate and a per-second ``video_view_retention`` curve; the
+curve at second 3 is the hook metric this series optimises for.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
@@ -24,7 +30,7 @@ from pathlib import Path
 import httpx
 
 from ..config import TikTokConfig
-from ..models import Comment, PostRef
+from ..models import Comment, PostMetrics, PostRef
 from .base import SourceError, env, parse_time, request_json
 
 log = logging.getLogger(__name__)
@@ -112,3 +118,55 @@ class TikTokBusiness:
                 raise SourceError(f"TikTok publish failed: {status.get('reason') or status}")
             time.sleep(5)
         raise SourceError(f"TikTok publish {share_id} did not finish in time; link it later with `choices link`")
+
+    # ---- analytics -----------------------------------------------------------
+    FIELDS = [
+        "item_id", "video_views", "reach", "likes", "comments", "shares", "favorites",
+        "average_time_watched", "full_video_watched_rate", "video_duration", "video_view_retention",
+    ]
+
+    def metrics(self, post_id: str) -> PostMetrics:
+        data = self._call(
+            "GET",
+            "business/video/list/",
+            params={
+                "business_id": self.business_id,
+                "fields": json.dumps(self.FIELDS),
+                "filters": json.dumps({"video_ids": [post_id]}),
+            },
+        )
+        videos = data.get("videos") or []
+        v = next((x for x in videos if str(x.get("item_id")) == str(post_id)), videos[0] if videos else None)
+        if v is None:
+            raise SourceError(f"TikTok: no analytics returned for video {post_id} yet")
+        return PostMetrics(
+            platform="tiktok",
+            post_id=post_id,
+            views=int(v.get("video_views") or 0),
+            reach=v.get("reach"),
+            likes=int(v.get("likes") or 0),
+            comments=int(v.get("comments") or 0),
+            shares=int(v.get("shares") or 0),
+            saves=int(v.get("favorites") or 0),
+            avg_watch_seconds=v.get("average_time_watched"),
+            completion_rate=_ratio(v.get("full_video_watched_rate")),
+            hold_3s=_retention_at(v.get("video_view_retention") or [], 3),
+        )
+
+
+def _ratio(x) -> float | None:
+    """TikTok reports some rates as 0-1 and some as 0-100 depending on field/version; normalise to 0-1."""
+    if x is None:
+        return None
+    x = float(x)
+    return x / 100 if x > 1 else x
+
+
+def _retention_at(curve: list[dict], second: int) -> float | None:
+    for point in curve:
+        try:
+            if int(float(point.get("second", -1))) == second:
+                return _ratio(point.get("percentage"))
+        except (TypeError, ValueError):
+            continue
+    return None

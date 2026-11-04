@@ -1,0 +1,8 @@
+services:
+  choices:
+    build: .
+    restart: unless-stopped
+    env_file: .env          # API keys + REVIEW_WEBHOOK_URL (see .env.example)
+    volumes:
+      - ./runs:/app/runs    # episodes, state and review pages persist on the host
+      - ./config:/app/config:ro

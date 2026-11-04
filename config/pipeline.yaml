@@ -8,8 +8,10 @@ providers:
   writer: claude          # claude | mock
   critic: claude          # claude | rules   (rules-only skips the LLM critic)
   vote_classifier: claude # claude | none    (LLM only sees comments the rule parser can't read)
+  frame_judge: claude     # claude | none    (vision QA on every generated frame before it costs video money)
+  hooks: claude           # claude | mock    (alternative hooks for ad variants)
   image: fal              # fal | mock
-  video: none             # fal | none      (none = Ken Burns motion on stills, ~10x cheaper)
+  video: fal              # fal | none       (none = Ken Burns on every shot)
   voice: elevenlabs       # elevenlabs | mock
 
 models:
@@ -19,11 +21,66 @@ models:
   critic_effort: medium
   vote_classifier: claude-opus-5-5
   vote_classifier_effort: low
-  # Image/video model IDs move fast. Check the provider's catalogue and pin what you tested.
-  fal_image: fal-ai/flux/dev
-  fal_video: fal-ai/kling-video/v2.1/standard/image-to-video
+  frame_judge: claude-opus-5-5
+  frame_judge_effort: low
+  hooks: claude-opus-5-5
+  hooks_effort: low
+  # Image/video models move monthly. See docs/MODELS.md for why these, and run
+  # `choices bakeoff` before switching.
+  fal_image: fal-ai/nano-banana-2              # shots without a recurring character
+  fal_image_edit: fal-ai/nano-banana-2/edit    # shots with cast members: up to 14 reference images
+  fal_video: fal-ai/kling-video/v3/pro/image-to-video
+  fal_video_audio: false                       # we narrate separately; native audio is ~1.5x the price
   elevenlabs_model: eleven_multilingual_v2
   elevenlabs_voice_id: ""   # set to a deep, calm narrator voice from your ElevenLabs library
+
+# Unit prices for the cost ledger, budget guard and `choices estimate`.
+# Re-check before trusting them; providers reprice often.
+pricing:
+  checked: "2026-11-04"
+  llm:            # USD per million tokens
+    claude-opus-5-5:   {input: 4.00, output: 20.00, cache_read: 0.20, cache_write: 5.00}
+    claude-sonnet-5-5: {input: 2.00, output: 10.00, cache_read: 0.20, cache_write: 2.50}
+    claude-haiku-5-5:  {input: 0.10, output: 0.50, cache_read: 0.01, cache_write: 0.125}
+  image:          # USD per image at 1K
+    fal-ai/nano-banana-2: 0.08
+    fal-ai/nano-banana-2/edit: 0.08
+    fal-ai/nano-banana-pro/edit: 0.15
+  video:          # USD per second, native audio off (audio on = x video_audio_multiplier)
+    fal-ai/kling-video/v3/pro/image-to-video: 0.112
+    fal-ai/kling-video/v2.6/pro/image-to-video: 0.07
+    fal-ai/veo3.1/fast/image-to-video: 0.10
+    fal-ai/veo3.1/image-to-video: 0.20
+    bytedance/seedance-2.0/image-to-video: 0.3034
+  video_audio_multiplier: 1.5
+  voice:          # USD per 1,000 characters
+    eleven_multilingual_v2: 0.10
+    eleven_v3: 0.10
+    eleven_flash_v2_5: 0.05
+
+budget:
+  max_usd_per_episode: 4.00
+  on_exceed: degrade      # degrade: skip remaining animation/rerolls and keep going | stop: fail the run
+
+video:
+  animate: hero           # hero | all | none
+  max_clips: 2            # the hook shot and the climax; everything else gets Ken Burns
+  min_seconds: 3
+  max_seconds: 15
+
+qa:
+  enabled: true
+  min_score: 3            # 1-5; frames below this are re-rolled with the judge's fix
+  max_rerolls: 2
+
+metrics:
+  track_days: 7
+  refresh_hours: 6
+  learn_from_last: 20
+  min_episodes_to_learn: 2
+
+notify:
+  webhook_url_env: REVIEW_WEBHOOK_URL   # Slack or Discord incoming webhook; pinged when an episode needs review
 
 writing:
   target_seconds: 50

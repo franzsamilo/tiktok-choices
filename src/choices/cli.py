@@ -7,6 +7,12 @@
     choices reroll  --day N --scene  regenerate one shot and re-render
     choices link    --day N --tiktok ID --instagram ID
     choices tally   --day N [--comments export.csv] [--force]
+    choices metrics                  pull TikTok/Instagram analytics now
+    choices variants --day N         hooks x formats for ad testing, no new media spend
+    choices bakeoff --day N --models a,b   compare image models on our own shots
+    choices cast                     (re)generate character reference sheets
+    choices estimate                 projected cost per episode under each setting
+    choices loop                     run forever (Docker/VM), ticking every hour
     choices demo    --days 3         full offline loop with a simulated audience
 """
 
@@ -16,14 +22,19 @@ import argparse
 import logging
 import random
 import shutil
+import signal
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import anthropic
 
+from .analytics import SimulatedInsights
 from .config import load_pipeline
+from .costs import estimate
 from .models import Comment
+from .notify import notify
 from .pipeline import Pipeline
 from .social.simulate import simulate_comments
 from .store import Store
@@ -134,6 +145,79 @@ class SimulatedAudience:
         )
 
 
+def cmd_metrics(args) -> int:
+    pipe = _pipeline(args)
+    n = pipe.refresh_metrics(force=True)
+    print(f"analytics refreshed for {n} episode(s)")
+    for k in pipe.kpis():
+        if k.views:
+            hold = f"{k.hold_3s:.0%}" if k.hold_3s is not None else "n/a"
+            cpm = f"${k.cost_per_1k_views:.2f}" if k.cost_per_1k_views is not None else "n/a"
+            print(f"day {k.day:>3}  {k.views:>8,} views  hold@3s {hold:>4}  cost/1k views {cpm}")
+    return 0
+
+
+def cmd_variants(args) -> int:
+    pipe = _pipeline(args)
+    vs = pipe.make_variants(args.day, hooks=args.hooks, formats=args.formats.split(","))
+    for v in vs:
+        print(f"{v.format:>5}  {v.angle:<16} {v.hook!r:44} -> {v.path}")
+    print(f"\n{len(vs)} variants. Media cost: $0.00 (reused); only the hook-writing call was new.")
+    return 0
+
+
+def cmd_bakeoff(args) -> int:
+    pipe = _pipeline(args)
+    scenes = [int(x) for x in args.scenes.split(",")] if args.scenes else None
+    report = pipe.bakeoff(args.day, [m.strip() for m in args.models.split(",") if m.strip()], scenes)
+    print(f"report: {report}")
+    return 0
+
+
+def cmd_cast(args) -> int:
+    made = _pipeline(args).ensure_cast(force=args.force)
+    print(f"{len(made)} reference sheet(s) generated" if made else "cast already has reference sheets (use --force)")
+    return 0
+
+
+def cmd_estimate(args) -> int:
+    cfg = load_pipeline(args.config)
+    rows = estimate(cfg, scenes=args.scenes, reroll_rate=args.reroll_rate)
+    print(f"Projected cost per episode. Prices checked {cfg.pricing.checked}; {args.scenes} shots, "
+          f"{cfg.writing.target_seconds}s, {args.reroll_rate:.0%} of frames re-rolled by QA.\n")
+    width = max(len(r.name) for r in rows)
+    print(f"{'':{width}}  per episode   per month (30)")
+    for r in rows:
+        print(f"{r.name:{width}}  {'$' + format(r.per_episode, '.2f'):>11}   {'$' + format(r.per_month, '.2f'):>14}")
+    default = rows[1]
+    print("\nDefault breakdown: " + " · ".join(f"{k} ${v:.2f}" for k, v in sorted(default.lines.items(), key=lambda kv: -kv[1])))
+    return 0
+
+
+def cmd_loop(args) -> int:
+    """Long-running mode for a container or VM: tick, sleep, repeat; never die on one bad run."""
+    pipe = _pipeline(args)
+    log = logging.getLogger("choices.loop")
+    stop = {"flag": False}
+
+    def _stop(*_):
+        stop["flag"] = True
+        log.info("stopping after the current tick")
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    while not stop["flag"]:
+        try:
+            log.info(pipe.tick().message)
+        except Exception as e:
+            log.exception("tick failed")
+            notify(pipe.cfg.notify.webhook_url_env, f"{pipe.bible.title}: pipeline tick failed: {e}")
+        deadline = time.monotonic() + args.interval + random.uniform(0, args.interval * 0.05)
+        while not stop["flag"] and time.monotonic() < deadline:
+            time.sleep(1)
+    return 0
+
+
 def cmd_demo(args) -> int:
     cfg = load_pipeline(args.config).offline()
     cfg.data_dir = args.data_dir or "runs/demo"
@@ -143,11 +227,13 @@ def cmd_demo(args) -> int:
     root = Path(cfg.data_dir)
     if root.exists():
         shutil.rmtree(root)
-    pipe = Pipeline(cfg, sources={})
+    pipe = Pipeline(cfg, sources={}, insights={})
     pipe._sources = {
         "tiktok": SimulatedAudience(pipe.store, "tiktok", 160, cfg.voting.window_hours),
         "instagram": SimulatedAudience(pipe.store, "instagram", 70, cfg.voting.window_hours),
     }
+    sim = SimulatedInsights(pipe.store)
+    pipe._insights = {"tiktok": sim, "instagram": sim}
     now = datetime.now().astimezone()
     for _ in range(args.days):
         res = pipe.tick(now)
@@ -157,8 +243,12 @@ def cmd_demo(args) -> int:
         now += timedelta(hours=cfg.voting.window_hours, minutes=5)
     last = pipe.store.episode_days()[-1]
     t = pipe.tally(last, now)
+    pipe.refresh_metrics(now, force=True)
     print(f"day {last}: audience picked {t.winner} ({t.unique_voters} voters)")
-    print(f"\nOpen {pipe.store.root / 'index.html'} to browse the episodes.")
+    if args.variants:
+        vs = pipe.make_variants(1, hooks=2, formats=["9:16", "4:5", "1:1"])
+        print(f"day 1: {len(vs)} ad variants (hooks x formats) at $0.00 extra media cost")
+    print(f"\nOpen {pipe.store.root / 'index.html'} to browse the episodes. All costs and analytics here are simulated.")
     return 0
 
 
@@ -199,9 +289,37 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force", action="store_true", help="tally before the voting window closes")
     p.set_defaults(fn=cmd_tally)
 
+    sub.add_parser("metrics", help="pull TikTok/Instagram analytics now").set_defaults(fn=cmd_metrics)
+
+    p = sub.add_parser("variants", help="hook x format variants for ad testing (reuses all media)")
+    p.add_argument("--day", type=int, required=True)
+    p.add_argument("--hooks", type=int, default=3)
+    p.add_argument("--formats", default="9:16,4:5,1:1")
+    p.set_defaults(fn=cmd_variants)
+
+    p = sub.add_parser("bakeoff", help="compare image models on this series' own shots")
+    p.add_argument("--day", type=int, required=True)
+    p.add_argument("--models", required=True, help="comma-separated model ids (fal ids, or mock)")
+    p.add_argument("--scenes", help="comma-separated scene numbers (default 1,2,3)")
+    p.set_defaults(fn=cmd_bakeoff)
+
+    p = sub.add_parser("cast", help="generate character reference sheets")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(fn=cmd_cast)
+
+    p = sub.add_parser("estimate", help="projected cost per episode under each setting")
+    p.add_argument("--scenes", type=int, default=5)
+    p.add_argument("--reroll-rate", type=float, default=0.3)
+    p.set_defaults(fn=cmd_estimate)
+
+    p = sub.add_parser("loop", help="run forever, ticking every --interval seconds")
+    p.add_argument("--interval", type=int, default=3600)
+    p.set_defaults(fn=cmd_loop)
+
     p = sub.add_parser("demo", help="offline end-to-end run with a simulated audience")
     p.add_argument("--days", type=int, default=3)
     p.add_argument("--fast", action="store_true", help="render at 540x960")
+    p.add_argument("--variants", action="store_true", help="also cut ad variants of day 1")
     p.set_defaults(fn=cmd_demo)
 
     args = ap.parse_args(argv)
